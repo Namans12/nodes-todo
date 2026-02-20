@@ -60,7 +60,11 @@ export function createBatchRouter(dbOverride?: DbOverride) {
           // Mark as completed
           drizzleDb
             .update(todos)
-            .set({ is_completed: 1, updated_at: now })
+            .set({
+              is_completed: 1,
+              completed_at: todo.is_completed === 1 ? (todo.completed_at ?? now) : now,
+              updated_at: now,
+            })
             .where(eq(todos.id, id))
             .run();
 

@@ -35,10 +35,13 @@ describe("Todos CRUD API", () => {
   async function createTodo(
     groupId: string,
     title: string,
-    description?: string
+    description?: string,
+    options?: { high_priority?: boolean; reminder_at?: string | null }
   ) {
     const payload: any = { title };
     if (description !== undefined) payload.description = description;
+    if (options?.high_priority !== undefined) payload.high_priority = options.high_priority;
+    if (options?.reminder_at !== undefined) payload.reminder_at = options.reminder_at;
 
     const res = await ctx.app.request(`/api/groups/${groupId}/todos`, {
       method: "POST",
@@ -59,6 +62,7 @@ describe("Todos CRUD API", () => {
       expect(body.data.title).toBe("Buy groceries"); // auto-capitalized
       expect(body.data.group_id).toBe(testGroupId);
       expect(body.data.is_completed).toBe(0);
+      expect(body.data.completed_at).toBeNull();
       expect(body.data.position).toBe(0);
       expect(body.data.deleted_at).toBeNull();
       expect(body.data.id).toBeDefined();
@@ -95,6 +99,17 @@ describe("Todos CRUD API", () => {
     it("should create a todo with null description when not provided", async () => {
       const { body } = await createTodo(testGroupId, "No description");
       expect(body.data.description).toBeNull();
+    });
+
+    it("should create a high-priority todo with reminder", async () => {
+      const reminderAt = new Date(Date.now() + 60_000).toISOString();
+      const { body } = await createTodo(testGroupId, "Important", undefined, {
+        high_priority: true,
+        reminder_at: reminderAt,
+      });
+
+      expect(body.data.high_priority).toBe(1);
+      expect(body.data.reminder_at).toBeDefined();
     });
 
     it("should auto-set position to end of group list", async () => {
@@ -147,6 +162,25 @@ describe("Todos CRUD API", () => {
 
       expect(res.status).toBe(400);
       expect(body.error).toContain("500");
+    });
+
+    it("should return 400 for invalid reminder_at", async () => {
+      const res = await ctx.app.request(`/api/groups/${testGroupId}/todos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Bad reminder", reminder_at: "not-a-date" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("should return 400 for reminder_at in the past on create", async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const res = await ctx.app.request(`/api/groups/${testGroupId}/todos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Past reminder", reminder_at: past }),
+      });
+      expect(res.status).toBe(400);
     });
   });
 
@@ -356,6 +390,23 @@ describe("Todos CRUD API", () => {
       expect(body.data.description).toBe("updated description");
     });
 
+    it("should update high_priority and reminder_at", async () => {
+      const { body: created } = await createTodo(testGroupId, "remind me");
+      const todoId = created.data.id;
+      const reminderAt = new Date(Date.now() + 120_000).toISOString();
+
+      const res = await ctx.app.request(`/api/todos/${todoId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ high_priority: true, reminder_at: reminderAt }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.data.high_priority).toBe(1);
+      expect(body.data.reminder_at).toBeDefined();
+    });
+
     it("should update updated_at timestamp", async () => {
       const { body: created } = await createTodo(testGroupId, "timestamped");
       const todoId = created.data.id;
@@ -426,6 +477,31 @@ describe("Todos CRUD API", () => {
       const body = await res.json();
       expect(body.error).toContain("500");
     });
+
+    it("should return 400 for invalid high_priority type", async () => {
+      const { body: created } = await createTodo(testGroupId, "valid");
+      const todoId = created.data.id;
+
+      const res = await ctx.app.request(`/api/todos/${todoId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ high_priority: "yes" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("should return 400 for reminder_at in the past on update", async () => {
+      const { body: created } = await createTodo(testGroupId, "valid");
+      const todoId = created.data.id;
+      const past = new Date(Date.now() - 60_000).toISOString();
+
+      const res = await ctx.app.request(`/api/todos/${todoId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reminder_at: past }),
+      });
+      expect(res.status).toBe(400);
+    });
   });
 
   // ─── PATCH /api/todos/:id/complete ────────────────────────────
@@ -443,6 +519,7 @@ describe("Todos CRUD API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.data.is_completed).toBe(1);
+      expect(body.data.completed_at).toBeTruthy();
     });
 
     it("should toggle completion from 1 back to 0", async () => {
@@ -462,6 +539,7 @@ describe("Todos CRUD API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.data.is_completed).toBe(0);
+      expect(body.data.completed_at).toBeNull();
     });
 
     it("should update updated_at on completion toggle", async () => {

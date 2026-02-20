@@ -3,18 +3,31 @@ import { useApp } from "../context/AppContext";
 import { todosApi } from "../api/client";
 import TodoItem from "./TodoItem";
 import ConnectionInline from "./ConnectionInline";
-import { Plus, ListChecks } from "lucide-react";
+import { Plus, ListChecks, CalendarDays, Clock3 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
 
 export default function TodoList() {
-  const { todos, selectedGroupId, groups, connections, refreshTodos } = useApp();
+  const {
+    todos,
+    selectedGroupId,
+    groups,
+    connections,
+    refreshTodos,
+    highlightTodoId,
+    clearHighlightedTodo,
+  } = useApp();
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
+  const [newHighPriority, setNewHighPriority] = useState(false);
+  const [enableReminder, setEnableReminder] = useState(false);
+  const [newReminderDate, setNewReminderDate] = useState("");
+  const [newReminderTime, setNewReminderTime] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [showDescField, setShowDescField] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+  const todayDate = new Date().toISOString().slice(0, 10);
 
   const selectedGroup = groups.find((g) => g.id === selectedGroupId);
   const activeTodos = todos.filter((t) => !t.deleted_at);
@@ -42,6 +55,15 @@ export default function TodoList() {
 
   // Solo todos = not part of any connection
   const soloTodos = activeTodos.filter((t) => !connectedTodoIds.has(t.id));
+  const sortedSoloTodos = [...soloTodos].sort((a, b) => {
+    if (a.high_priority !== b.high_priority) return b.high_priority - a.high_priority;
+    if (a.high_priority === 1 && b.high_priority === 1) {
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    }
+    return a.position - b.position;
+  });
+  const highPrioritySoloTodos = sortedSoloTodos.filter((t) => t.high_priority === 1);
+  const regularSoloTodos = sortedSoloTodos.filter((t) => t.high_priority !== 1);
 
   useEffect(() => {
     if (isAdding && inputRef.current) {
@@ -55,13 +77,52 @@ export default function TodoList() {
     }
   }, [showDescField]);
 
+  useEffect(() => {
+    if (!highlightTodoId) return;
+    const timer = setTimeout(() => {
+      clearHighlightedTodo();
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [highlightTodoId, clearHighlightedTodo]);
+
   const handleCreate = async () => {
     const title = newTitle.trim();
     if (!title || !selectedGroupId) return;
+    const defaultTime = "10:00";
+    const reminderAt = (() => {
+      if (!enableReminder) return null;
+      const resolvedDate = newReminderDate || todayDate;
+      const resolvedTime = newReminderTime || defaultTime;
+      if (newReminderDate !== resolvedDate) setNewReminderDate(resolvedDate);
+      if (newReminderTime !== resolvedTime) setNewReminderTime(resolvedTime);
+      const target = new Date(`${resolvedDate}T${resolvedTime}`);
+      if (Number.isNaN(target.getTime())) return null;
+      return target.toISOString();
+    })();
+    if (enableReminder && !reminderAt) {
+      toast.error("Reminder needs both date and time.");
+      return;
+    }
+    if (reminderAt && new Date(reminderAt).getTime() <= Date.now()) {
+      toast.error("Reminder time must be in the future");
+      return;
+    }
     try {
-      await todosApi.create(selectedGroupId, title, newDescription.trim() || undefined);
+      await todosApi.create(
+        selectedGroupId,
+        title,
+        newDescription.trim() || undefined,
+        {
+          high_priority: newHighPriority,
+          reminder_at: reminderAt,
+        }
+      );
       setNewTitle("");
       setNewDescription("");
+      setNewHighPriority(false);
+      setEnableReminder(false);
+      setNewReminderDate("");
+      setNewReminderTime("");
       setShowDescField(false);
       await refreshTodos();
     } catch (e: unknown) {
@@ -81,6 +142,10 @@ export default function TodoList() {
     } else if (e.key === "Escape") {
       setNewTitle("");
       setNewDescription("");
+      setNewHighPriority(false);
+      setEnableReminder(false);
+      setNewReminderDate("");
+      setNewReminderTime("");
       setShowDescField(false);
       setIsAdding(false);
     }
@@ -138,12 +203,31 @@ export default function TodoList() {
         )}
       </div>
 
+      {/* High-priority solo tasks */}
+      {highPrioritySoloTodos.length > 0 && (
+        <div className="space-y-2 mb-4">
+          <AnimatePresence mode="popLayout">
+            {highPrioritySoloTodos.map((todo) => (
+              <TodoItem
+                key={todo.id}
+                todo={todo}
+                isHighlighted={highlightTodoId === todo.id}
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
+
       {/* Connections in this group */}
       {groupConnections.length > 0 && (
         <div className="space-y-2 mb-4">
           <AnimatePresence mode="popLayout">
             {groupConnections.map((conn) => (
-              <ConnectionInline key={conn.id} connection={conn} />
+              <ConnectionInline
+                key={conn.id}
+                connection={conn}
+                highlightTodoId={highlightTodoId}
+              />
             ))}
           </AnimatePresence>
         </div>
@@ -151,11 +235,14 @@ export default function TodoList() {
 
       {/* Solo todos (not part of any connection) */}
       <div className="space-y-2">
-        <AnimatePresence mode="popLayout">
-          {soloTodos
-            .sort((a, b) => a.position - b.position)
+          <AnimatePresence mode="popLayout">
+          {regularSoloTodos
             .map((todo) => (
-              <TodoItem key={todo.id} todo={todo} />
+              <TodoItem
+                key={todo.id}
+                todo={todo}
+                isHighlighted={highlightTodoId === todo.id}
+              />
             ))}
         </AnimatePresence>
       </div>
@@ -171,28 +258,99 @@ export default function TodoList() {
               exit={{ opacity: 0, y: 8 }}
               transition={{ duration: 0.2 }}
             >
-              <input
-                ref={inputRef}
-                className="input-base"
-                placeholder="What needs to be done?"
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                onKeyDown={handleTitleKeyDown}
-                onBlur={() => {
-                  if (!newTitle.trim() && !showDescField) setIsAdding(false);
-                }}
-              />
-              {showDescField && (
-                <textarea
-                  ref={descRef}
-                  className="input-base !py-2 text-sm resize-none mt-2"
-                  placeholder="Add a description..."
-                  rows={2}
-                  value={newDescription}
-                  onChange={(e) => setNewDescription(e.target.value)}
-                  onKeyDown={handleDescKeyDown}
+              <div
+                className={`rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 transition-all duration-200 ${
+                  showDescField ? "ring-1 ring-indigo-500/40 border-indigo-400/60 dark:border-indigo-500/40" : ""
+                }`}
+              >
+                <input
+                  ref={inputRef}
+                  className={`w-full px-4 py-3 bg-transparent text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none ${
+                    showDescField ? "rounded-t-xl" : "rounded-xl"
+                  }`}
+                  placeholder="What needs to be done?"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  onKeyDown={handleTitleKeyDown}
+                  onBlur={() => {
+                    if (!newTitle.trim() && !showDescField) setIsAdding(false);
+                  }}
                 />
-              )}
+                {showDescField && (
+                  <textarea
+                    ref={descRef}
+                    className="w-full px-4 py-2 bg-transparent rounded-b-xl border-t border-dotted border-slate-300 dark:border-slate-600 text-sm text-slate-800 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none resize-none"
+                    placeholder="Add a description..."
+                    rows={2}
+                    value={newDescription}
+                    onChange={(e) => setNewDescription(e.target.value)}
+                    onKeyDown={handleDescKeyDown}
+                  />
+                )}
+                <div className="px-4 py-2 border-t border-dashed border-slate-300 dark:border-slate-600 flex flex-wrap items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={newHighPriority}
+                      onChange={(e) => setNewHighPriority(e.target.checked)}
+                      className="rounded border-slate-300 dark:border-slate-600"
+                    />
+                    High Priority
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={enableReminder}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEnableReminder(checked);
+                        if (checked && !newReminderDate && !newReminderTime) {
+                          const now = new Date();
+                          now.setMinutes(now.getMinutes() + 5);
+                          const pad = (n: number) => String(n).padStart(2, "0");
+                          setNewReminderDate(
+                            `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+                          );
+                          setNewReminderTime(`${pad(now.getHours())}:${pad(now.getMinutes())}`);
+                        }
+                      }}
+                      className="rounded border-slate-300 dark:border-slate-600"
+                    />
+                    Reminder
+                  </label>
+                  {enableReminder && (
+                    <>
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+                        <CalendarDays size={13} />
+                        <input
+                          type="date"
+                          value={newReminderDate}
+                          min={todayDate}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            if (value && value < todayDate) {
+                              setNewReminderDate(todayDate);
+                              toast.error("Past date is not allowed. Updated to current date.");
+                              return;
+                            }
+                            setNewReminderDate(value);
+                          }}
+                          className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-xs"
+                        />
+                      </label>
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+                        <Clock3 size={13} />
+                        <input
+                          type="time"
+                          value={newReminderTime}
+                          onChange={(e) => setNewReminderTime(e.target.value)}
+                          className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-xs"
+                        />
+                      </label>
+                    </>
+                  )}
+                </div>
+              </div>
               <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 ml-1">
                 <kbd className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-xs font-mono">Enter</kbd> to add
                 · <kbd className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-xs font-mono">Shift+Enter</kbd> for description

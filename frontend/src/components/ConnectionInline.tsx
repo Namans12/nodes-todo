@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { todosApi, connectionsApi } from "../api/client";
 import { useApp } from "../context/AppContext";
 import type { Connection } from "../types";
@@ -8,9 +8,10 @@ import toast from "react-hot-toast";
 
 interface ConnectionInlineProps {
   connection: Connection;
+  highlightTodoId?: string | null;
 }
 
-export default function ConnectionInline({ connection }: ConnectionInlineProps) {
+export default function ConnectionInline({ connection, highlightTodoId = null }: ConnectionInlineProps) {
   const { refreshTodos, refreshConnections } = useApp();
   const [expanded, setExpanded] = useState(false);
   const { progress, is_fully_complete } = connection;
@@ -19,6 +20,13 @@ export default function ConnectionInline({ connection }: ConnectionInlineProps) 
     (item) => !item.is_completed
   );
   const nextTask = nextTaskIndex >= 0 ? connection.items[nextTaskIndex] : null;
+  const hasHighlightedTodo = !!(
+    highlightTodoId && connection.items.some((item) => item.todo_id === highlightTodoId)
+  );
+
+  useEffect(() => {
+    if (hasHighlightedTodo) setExpanded(true);
+  }, [hasHighlightedTodo]);
 
   const handleToggle = async (todoId: string) => {
     try {
@@ -59,8 +67,8 @@ export default function ConnectionInline({ connection }: ConnectionInlineProps) 
       transition={{ duration: 0.25 }}
       className={`glass rounded-xl overflow-hidden border-l-4 group/conn ${
         is_fully_complete
-          ? "border-l-emerald-500/60"
-          : "border-l-indigo-500/60"
+          ? "border-l-emerald-500 dark:border-l-emerald-400"
+          : "border-l-indigo-500 dark:border-l-indigo-400"
       }`}
     >
       {/* Header row — shows connection name + next task */}
@@ -106,7 +114,13 @@ export default function ConnectionInline({ connection }: ConnectionInlineProps) 
                   onClick={() => handleToggle(nextTask.todo_id)}
                   className="flex-shrink-0 w-4 h-4 rounded border-2 border-indigo-400 dark:border-indigo-500 bg-indigo-500/20 ring-2 ring-indigo-400/20 hover:scale-110 transition-transform cursor-pointer"
                 />
-                <span className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+                <span
+                  className={`text-sm font-medium truncate ${
+                    nextTask.high_priority === 1
+                      ? "text-amber-700 dark:text-amber-300"
+                      : "text-slate-900 dark:text-slate-100"
+                  }`}
+                >
                   {nextTask.title}
                 </span>
                 <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-indigo-500/10 text-[9px] font-bold text-indigo-600 dark:text-indigo-400 flex-shrink-0">
@@ -174,7 +188,15 @@ export default function ConnectionInline({ connection }: ConnectionInlineProps) 
                   const isNext = index === nextTaskIndex;
 
                   return (
-                    <div key={item.id} className="flex items-stretch">
+                    <div
+                      key={item.id}
+                      data-conn-todo-id={item.todo_id}
+                      className={`flex items-stretch ${
+                        highlightTodoId === item.todo_id
+                          ? "rounded-lg bg-indigo-500/10 dark:bg-indigo-500/15"
+                          : ""
+                      }`}
+                    >
                       {/* Node dot + line */}
                       <div className="flex flex-col items-center mr-3 w-5">
                         <button
@@ -212,9 +234,15 @@ export default function ConnectionInline({ connection }: ConnectionInlineProps) 
                           <span
                             className={`text-[13px] transition-all duration-300 ${
                               item.is_completed
-                                ? "line-through text-slate-400 dark:text-slate-500"
+                                ? item.high_priority === 1
+                                  ? "line-through text-amber-500/70 dark:text-amber-300/60"
+                                  : "line-through text-slate-400 dark:text-slate-500"
                                 : isNext
-                                ? "font-medium text-slate-900 dark:text-slate-100"
+                                ? item.high_priority === 1
+                                  ? "font-medium text-amber-700 dark:text-amber-300"
+                                  : "font-medium text-slate-900 dark:text-slate-100"
+                                : item.high_priority === 1
+                                ? "text-amber-700 dark:text-amber-300"
                                 : "text-slate-600 dark:text-slate-400"
                             }`}
                           >

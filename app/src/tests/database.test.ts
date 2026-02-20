@@ -80,6 +80,7 @@ describe("Database Setup", () => {
     expect(columnNames).toContain("id");
     expect(columnNames).toContain("name");
     expect(columnNames).toContain("position");
+    expect(columnNames).toContain("deleted_at");
     expect(columnNames).toContain("created_at");
     expect(columnNames).toContain("updated_at");
   });
@@ -91,7 +92,10 @@ describe("Database Setup", () => {
     expect(columnNames).toContain("group_id");
     expect(columnNames).toContain("title");
     expect(columnNames).toContain("description");
+    expect(columnNames).toContain("high_priority");
+    expect(columnNames).toContain("reminder_at");
     expect(columnNames).toContain("is_completed");
+    expect(columnNames).toContain("completed_at");
     expect(columnNames).toContain("position");
     expect(columnNames).toContain("deleted_at");
     expect(columnNames).toContain("created_at");

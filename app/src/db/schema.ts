@@ -4,6 +4,7 @@ export const groups = sqliteTable("groups", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
   position: integer("position").notNull().default(0),
+  deleted_at: text("deleted_at"),
   created_at: text("created_at").notNull(),
   updated_at: text("updated_at").notNull(),
 });
@@ -15,7 +16,10 @@ export const todos = sqliteTable("todos", {
     .references(() => groups.id),
   title: text("title").notNull(),
   description: text("description"),
+  high_priority: integer("high_priority").notNull().default(0),
+  reminder_at: text("reminder_at"),
   is_completed: integer("is_completed").notNull().default(0),
+  completed_at: text("completed_at"),
   position: integer("position").notNull().default(0),
   deleted_at: text("deleted_at"),
   created_at: text("created_at").notNull(),

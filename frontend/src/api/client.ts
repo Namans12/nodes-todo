@@ -43,12 +43,30 @@ export const todosApi = {
   list: (groupId: string) =>
     request<Todo[]>(`/groups/${groupId}/todos`),
   get: (id: string) => request<Todo>(`/todos/${id}`),
-  create: (groupId: string, title: string, description?: string) =>
+  create: (
+    groupId: string,
+    title: string,
+    description?: string,
+    options?: { high_priority?: boolean; reminder_at?: string | null }
+  ) =>
     request<Todo>(`/groups/${groupId}/todos`, {
       method: "POST",
-      body: JSON.stringify({ title, description }),
+      body: JSON.stringify({
+        title,
+        description,
+        high_priority: options?.high_priority,
+        reminder_at: options?.reminder_at,
+      }),
     }),
-  update: (id: string, data: { title?: string; description?: string }) =>
+  update: (
+    id: string,
+    data: {
+      title?: string;
+      description?: string | null;
+      high_priority?: boolean;
+      reminder_at?: string | null;
+    }
+  ) =>
     request<Todo>(`/todos/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -86,6 +104,10 @@ export const batchApi = {
 // ── Trash ───────────────────────────────────────────────
 export const trashApi = {
   list: () => request<TrashItem[]>("/trash"),
+  restoreGroup: (groupId: string) =>
+    request<{ message: string; restored_count: number }>(`/trash/groups/${groupId}/restore`, { method: "POST" }),
+  deleteGroupPermanently: (groupId: string) =>
+    request<{ message: string; deleted_todo_count: number }>(`/trash/groups/${groupId}`, { method: "DELETE" }),
   restore: (id: string) =>
     request<Todo>(`/trash/${id}/restore`, { method: "POST" }),
   deletePermanently: (id: string) =>
@@ -135,6 +157,7 @@ export interface SearchResult {
   id: string;
   title: string;
   description: string | null;
+  high_priority: number;
   is_completed: number;
   position: number;
   group: { id: string; name: string };

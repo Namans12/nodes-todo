@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { eq, asc, sql, inArray } from "drizzle-orm";
+import { eq, asc, sql, and, isNull } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "../db/connection.js";
-import { groups, todos, connectionItems, connections } from "../db/schema.js";
+import { groups, todos } from "../db/schema.js";
 
 // Type for the injected DB (allows test override)
 type DbOverride = ReturnType<typeof getDb>;
@@ -81,6 +81,7 @@ export function createGroupsRouter(dbOverride?: DbOverride) {
       const allGroups = drizzleDb
         .select()
         .from(groups)
+        .where(isNull(groups.deleted_at))
         .orderBy(asc(groups.position))
         .all();
 
@@ -147,7 +148,7 @@ export function createGroupsRouter(dbOverride?: DbOverride) {
       const group = drizzleDb
         .select()
         .from(groups)
-        .where(eq(groups.id, id))
+        .where(and(eq(groups.id, id), isNull(groups.deleted_at)))
         .get();
 
       if (!group) {
@@ -183,7 +184,7 @@ export function createGroupsRouter(dbOverride?: DbOverride) {
       const group = drizzleDb
         .select()
         .from(groups)
-        .where(eq(groups.id, id))
+        .where(and(eq(groups.id, id), isNull(groups.deleted_at)))
         .get();
 
       if (!group) {
@@ -233,61 +234,27 @@ export function createGroupsRouter(dbOverride?: DbOverride) {
       const group = drizzleDb
         .select()
         .from(groups)
-        .where(eq(groups.id, id))
+        .where(and(eq(groups.id, id), isNull(groups.deleted_at)))
         .get();
 
       if (!group) {
         return c.json({ error: "Group not found" }, 404);
       }
 
-      // Run in a transaction: clean up connection_items, orphaned connections,
-      // todos and finally the group itself
+      // Run in a transaction: soft-delete the group's todos and group.
+      // Keep connection_items intact so connections can come back on restore.
       const transaction = sqlite.transaction(() => {
-        // Get all todo IDs that belong to this group
-        const groupTodos = drizzleDb
-          .select({ id: todos.id })
-          .from(todos)
-          .where(eq(todos.group_id, id))
-          .all();
-        const todoIds = groupTodos.map((t) => t.id);
-
-        if (todoIds.length > 0) {
-          // Delete connection_items that reference these todos
-          drizzleDb
-            .delete(connectionItems)
-            .where(inArray(connectionItems.todo_id, todoIds))
-            .run();
-
-          // Delete any connections that are now empty (no remaining items)
-          const stillUsedItems = drizzleDb
-            .select({ connId: connectionItems.connection_id })
-            .from(connectionItems)
-            .all();
-          const stillUsedIds = [...new Set(stillUsedItems.map((r) => r.connId))];
-          const allConns = drizzleDb
-            .select({ id: connections.id })
-            .from(connections)
-            .all();
-          const orphanedIds = allConns
-            .filter((c) => !stillUsedIds.includes(c.id))
-            .map((c) => c.id);
-          if (orphanedIds.length > 0) {
-            drizzleDb
-              .delete(connections)
-              .where(inArray(connections.id, orphanedIds))
-              .run();
-          }
-
-          // Hard-delete the todos that belong to this group
-          drizzleDb
-            .delete(todos)
-            .where(eq(todos.group_id, id))
-            .run();
-        }
-
-        // Delete the group
+        // Move all active todos in this group to trash
         drizzleDb
-          .delete(groups)
+          .update(todos)
+          .set({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .where(and(eq(todos.group_id, id), isNull(todos.deleted_at)))
+          .run();
+
+        // Soft-delete the group so it no longer appears in active group lists.
+        drizzleDb
+          .update(groups)
+          .set({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
           .where(eq(groups.id, id))
           .run();
       });

@@ -336,9 +336,15 @@ function ConnectionCard({
                         <span
                           className={`text-sm transition-all duration-300 ${
                             item.is_completed
-                              ? "line-through text-slate-400 dark:text-slate-500"
+                              ? item.high_priority === 1
+                                ? "line-through text-amber-500/70 dark:text-amber-300/60"
+                                : "line-through text-slate-400 dark:text-slate-500"
                               : isNext
-                              ? "font-medium text-slate-900 dark:text-slate-100"
+                              ? item.high_priority === 1
+                                ? "font-medium text-amber-700 dark:text-amber-300"
+                                : "font-medium text-slate-900 dark:text-slate-100"
+                              : item.high_priority === 1
+                              ? "text-amber-700 dark:text-amber-300"
                               : "text-slate-700 dark:text-slate-300"
                           }`}
                         >

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { eq, isNotNull, sql, inArray } from "drizzle-orm";
 import { getDb } from "../db/connection.js";
-import { todos, connectionItems, connections } from "../db/schema.js";
+import { todos, connectionItems, connections, groups } from "../db/schema.js";
 
 // Type for the injected DB (allows test override)
 type DbOverride = ReturnType<typeof getDb>;
@@ -10,6 +10,8 @@ type DbOverride = ReturnType<typeof getDb>;
  * Creates the trash router for managing soft-deleted todos.
  * Routes:
  *   GET    /api/trash              — List all soft-deleted todos with remaining days
+ *   POST   /api/trash/groups/:id/restore  — Restore a soft-deleted group with its todos
+ *   DELETE /api/trash/groups/:id          — Permanently delete a soft-deleted group with its todos
  *   POST   /api/trash/:id/restore  — Restore a soft-deleted todo
  *   DELETE /api/trash/:id          — Permanently delete a single todo
  *   DELETE /api/trash              — Empty entire trash permanently
@@ -32,6 +34,24 @@ export function createTrashRouter(dbOverride?: DbOverride) {
         .where(isNotNull(todos.deleted_at))
         .all();
 
+      const groupIds = [...new Set(deletedTodos.map((todo) => todo.group_id))];
+      const groupRows = groupIds.length > 0
+        ? drizzleDb
+          .select({ id: groups.id, name: groups.name, deleted_at: groups.deleted_at })
+          .from(groups)
+          .where(inArray(groups.id, groupIds))
+          .all()
+        : [];
+      const groupMetaMap = new Map(
+        groupRows.map((group) => [
+          group.id,
+          {
+            name: group.name,
+            deleted_at: group.deleted_at,
+          },
+        ])
+      );
+
       const now = new Date();
       const PURGE_DAYS = 30;
 
@@ -43,11 +63,141 @@ export function createTrashRouter(dbOverride?: DbOverride) {
 
         return {
           ...todo,
+          group_name: groupMetaMap.get(todo.group_id)?.name ?? "Unknown group",
+          group_deleted: !!groupMetaMap.get(todo.group_id)?.deleted_at,
+          group_deleted_at: groupMetaMap.get(todo.group_id)?.deleted_at ?? null,
           days_until_purge: daysRemaining,
         };
       });
 
       return c.json({ data: result });
+    } catch {
+      return c.json({ error: "Internal server error" }, 500);
+    }
+  });
+
+  // POST /api/trash/groups/:id/restore — Restore a soft-deleted group and all its todos
+  router.post("/groups/:id/restore", async (c) => {
+    try {
+      const id = c.req.param("id");
+      const { db: drizzleDb, sqlite } = db();
+
+      const group = drizzleDb
+        .select()
+        .from(groups)
+        .where(eq(groups.id, id))
+        .get();
+
+      if (!group) {
+        return c.json({ error: "Group not found" }, 404);
+      }
+
+      if (!group.deleted_at) {
+        return c.json({ error: "Group is not in trash" }, 400);
+      }
+
+      const now = new Date().toISOString();
+      let restoredCount = 0;
+
+      const transaction = sqlite.transaction(() => {
+        drizzleDb
+          .update(groups)
+          .set({ deleted_at: null, updated_at: now })
+          .where(eq(groups.id, id))
+          .run();
+
+        const result = drizzleDb
+          .update(todos)
+          .set({ deleted_at: null, updated_at: now })
+          .where(sql`${todos.group_id} = ${id} AND ${todos.deleted_at} IS NOT NULL`)
+          .run();
+        restoredCount = result.changes ?? 0;
+      });
+      transaction();
+
+      return c.json({
+        data: {
+          message: "Group restored successfully",
+          restored_count: restoredCount,
+        },
+      });
+    } catch {
+      return c.json({ error: "Internal server error" }, 500);
+    }
+  });
+
+  // DELETE /api/trash/groups/:id — Permanently delete a soft-deleted group and all its todos
+  router.delete("/groups/:id", async (c) => {
+    try {
+      const id = c.req.param("id");
+      const { db: drizzleDb, sqlite } = db();
+
+      const group = drizzleDb
+        .select()
+        .from(groups)
+        .where(eq(groups.id, id))
+        .get();
+
+      if (!group) {
+        return c.json({ error: "Group not found" }, 404);
+      }
+
+      if (!group.deleted_at) {
+        return c.json({ error: "Group is not in trash" }, 400);
+      }
+
+      const groupTodos = drizzleDb
+        .select({ id: todos.id })
+        .from(todos)
+        .where(eq(todos.group_id, id))
+        .all();
+      const todoIds = groupTodos.map((t) => t.id);
+
+      const transaction = sqlite.transaction(() => {
+        if (todoIds.length > 0) {
+          drizzleDb
+            .delete(connectionItems)
+            .where(inArray(connectionItems.todo_id, todoIds))
+            .run();
+
+          const stillUsed = drizzleDb
+            .select({ connId: connectionItems.connection_id })
+            .from(connectionItems)
+            .all();
+          const stillUsedIds = [...new Set(stillUsed.map((r) => r.connId))];
+          const allConns = drizzleDb
+            .select({ id: connections.id })
+            .from(connections)
+            .all();
+          const orphanedIds = allConns
+            .filter((c) => !stillUsedIds.includes(c.id))
+            .map((c) => c.id);
+          if (orphanedIds.length > 0) {
+            drizzleDb
+              .delete(connections)
+              .where(inArray(connections.id, orphanedIds))
+              .run();
+          }
+        }
+
+        drizzleDb
+          .delete(todos)
+          .where(eq(todos.group_id, id))
+          .run();
+
+        drizzleDb
+          .delete(groups)
+          .where(eq(groups.id, id))
+          .run();
+      });
+      transaction();
+
+      return c.json({
+        data: {
+          message: "Group permanently deleted",
+          deleted_todo_count: todoIds.length,
+        },
+      });
     } catch {
       return c.json({ error: "Internal server error" }, 500);
     }
@@ -75,6 +225,19 @@ export function createTrashRouter(dbOverride?: DbOverride) {
       }
 
       const now = new Date().toISOString();
+      const parentGroup = drizzleDb
+        .select()
+        .from(groups)
+        .where(eq(groups.id, todo.group_id))
+        .get();
+
+      if (parentGroup?.deleted_at) {
+        drizzleDb
+          .update(groups)
+          .set({ deleted_at: null, updated_at: now })
+          .where(eq(groups.id, parentGroup.id))
+          .run();
+      }
 
       drizzleDb
         .update(todos)
@@ -169,8 +332,13 @@ export function createTrashRouter(dbOverride?: DbOverride) {
         .from(todos)
         .where(isNotNull(todos.deleted_at))
         .all();
+      const trashedGroups = drizzleDb
+        .select({ id: groups.id })
+        .from(groups)
+        .where(isNotNull(groups.deleted_at))
+        .all();
 
-      if (trashedTodos.length === 0) {
+      if (trashedTodos.length === 0 && trashedGroups.length === 0) {
         return c.json({ data: { message: "Trash is already empty", deleted_count: 0 } });
       }
 
@@ -208,6 +376,21 @@ export function createTrashRouter(dbOverride?: DbOverride) {
           .delete(todos)
           .where(isNotNull(todos.deleted_at))
           .run();
+
+        // Remove groups that are in trash and have no remaining todos.
+        for (const group of trashedGroups) {
+          const remaining = drizzleDb
+            .select({ count: sql<number>`COUNT(*)` })
+            .from(todos)
+            .where(eq(todos.group_id, group.id))
+            .get();
+          if ((remaining?.count ?? 0) === 0) {
+            drizzleDb
+              .delete(groups)
+              .where(eq(groups.id, group.id))
+              .run();
+          }
+        }
       });
       transaction();
 
@@ -218,7 +401,7 @@ export function createTrashRouter(dbOverride?: DbOverride) {
       return c.json({
         data: {
           message: "Trash emptied successfully",
-          deleted_count: trashedTodos.length,
+          deleted_count: trashedTodos.length + trashedGroups.length,
         },
       });
     } catch {
@@ -291,6 +474,27 @@ export function runAutoPurge(dbOverride?: DbOverride): number {
         .delete(todos)
         .where(eq(todos.id, todo.id))
         .run();
+    }
+
+    // Clean up any soft-deleted groups that no longer have todos.
+    const deletedGroups = drizzleDb
+      .select({ id: groups.id })
+      .from(groups)
+      .where(isNotNull(groups.deleted_at))
+      .all();
+
+    for (const group of deletedGroups) {
+      const remaining = drizzleDb
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(todos)
+        .where(eq(todos.group_id, group.id))
+        .get();
+      if ((remaining?.count ?? 0) === 0) {
+        drizzleDb
+          .delete(groups)
+          .where(eq(groups.id, group.id))
+          .run();
+      }
     }
   });
   transaction();

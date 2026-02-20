@@ -8,7 +8,10 @@ import {
   Check,
   Zap,
   GripVertical,
-  Menu,
+  Eye,
+  EyeOff,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -33,8 +36,10 @@ interface DragState {
 const NODE_W = 180;
 const NODE_H = 60;
 const GRID = 20;          // matches background dot grid
-const CANVAS_W = 2400;   // virtual canvas width
-const CANVAS_H = 1600;   // virtual canvas height
+const BASE_CANVAS_W = 2400;   // virtual canvas width
+const BASE_CANVAS_H = 1600;   // virtual canvas height
+const NORMAL_VIEW_EXTRA_W = 360;
+const NORMAL_VIEW_EXTRA_H = 240;
 
 const snapGrid = (v: number, max: number) =>
   Math.round(Math.max(0, Math.min(v, max)) / GRID) * GRID;
@@ -53,7 +58,29 @@ export default function GraphView() {
   const [hoverTarget, setHoverTarget] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPanel, setShowPanel] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [canvasSize, setCanvasSize] = useState({
+    w: BASE_CANVAS_W + NORMAL_VIEW_EXTRA_W,
+    h: BASE_CANVAS_H + NORMAL_VIEW_EXTRA_H,
+  });
   const canvasRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<HTMLDivElement>(null);
+
+  // Keep graph group selection valid as groups are deleted/restored in real time.
+  useEffect(() => {
+    setGroupId((prev) => {
+      if (prev && groups.some((g) => g.id === prev)) return prev;
+      if (selectedGroupId && groups.some((g) => g.id === selectedGroupId)) {
+        return selectedGroupId;
+      }
+      return groups[0]?.id ?? null;
+    });
+  }, [groups, selectedGroupId]);
+
+  // Ensure Graph-aks reflects connection changes when opening this view.
+  useEffect(() => {
+    refreshConnections().catch(() => undefined);
+  }, [refreshConnections]);
 
   /* ── Load todos ─────────────────────────────────── */
 
@@ -69,6 +96,7 @@ export default function GraphView() {
         const data = await todosApi.list(groupId);
         setTodos(data.filter((t) => !t.deleted_at));
       } catch {
+        setTodos([]);
         toast.error("Failed to load tasks");
       } finally {
         setLoading(false);
@@ -92,8 +120,8 @@ export default function GraphView() {
           if (!updated[t.id]) {
             const cols = Math.max(3, Math.ceil(Math.sqrt(todos.length)));
             updated[t.id] = {
-              x: snapGrid(60 + (i % cols) * (NODE_W + 40), CANVAS_W - NODE_W),
-              y: snapGrid(60 + Math.floor(i / cols) * (NODE_H + 60), CANVAS_H - NODE_H),
+              x: snapGrid(60 + (i % cols) * (NODE_W + 40), canvasSize.w - NODE_W),
+              y: snapGrid(60 + Math.floor(i / cols) * (NODE_H + 60), canvasSize.h - NODE_H),
             };
             dirty = true;
           }
@@ -109,13 +137,13 @@ export default function GraphView() {
     const fresh: Record<string, NodePosition> = {};
     todos.forEach((t, i) => {
       fresh[t.id] = {
-        x: snapGrid(60 + (i % cols) * (NODE_W + 40), CANVAS_W - NODE_W),
-        y: snapGrid(60 + Math.floor(i / cols) * (NODE_H + 60), CANVAS_H - NODE_H),
+        x: snapGrid(60 + (i % cols) * (NODE_W + 40), canvasSize.w - NODE_W),
+        y: snapGrid(60 + Math.floor(i / cols) * (NODE_H + 60), canvasSize.h - NODE_H),
       };
     });
     setPositions(fresh);
     localStorage.setItem(key, JSON.stringify(fresh));
-  }, [todos, groupId]);
+  }, [todos, groupId, canvasSize.w, canvasSize.h]);
 
   const savePositions = useCallback(
     (pos: Record<string, NodePosition>) => {
@@ -239,11 +267,13 @@ export default function GraphView() {
         const scrollTop = canvasRef.current?.scrollTop ?? 0;
         const rawX = e.clientX - (rect?.left ?? 0) + scrollLeft - dragOffset.x;
         const rawY = e.clientY - (rect?.top ?? 0) + scrollTop - dragOffset.y;
+        const maxX = Math.max(canvasSize.w - NODE_W, rawX + 220);
+        const maxY = Math.max(canvasSize.h - NODE_H, rawY + 220);
         setPositions((prev) => ({
           ...prev,
           [draggingNode]: {
-            x: snapGrid(rawX, CANVAS_W - NODE_W),
-            y: snapGrid(rawY, CANVAS_H - NODE_H),
+            x: snapGrid(rawX, maxX),
+            y: snapGrid(rawY, maxY),
           },
         }));
       }
@@ -257,7 +287,7 @@ export default function GraphView() {
         setHoverTarget(tId && tId !== connectDrag.fromTodoId ? tId : null);
       }
     },
-    [draggingNode, dragOffset, connectDrag]
+    [draggingNode, dragOffset, connectDrag, canvasSize.w, canvasSize.h]
   );
 
   const onMouseUp = useCallback(() => {
@@ -282,6 +312,47 @@ export default function GraphView() {
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, [onMouseMove, onMouseUp]);
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      setIsFullscreen(document.fullscreenElement === graphRef.current);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
+
+  useEffect(() => {
+    const viewW = canvasRef.current?.clientWidth ?? 0;
+    const viewH = canvasRef.current?.clientHeight ?? 0;
+    const maxX = Math.max(
+      0,
+      ...Object.values(positions).map((p) => p.x + NODE_W + 220)
+    );
+    const maxY = Math.max(
+      0,
+      ...Object.values(positions).map((p) => p.y + NODE_H + 220)
+    );
+
+    const minCanvasW = isFullscreen
+      ? BASE_CANVAS_W
+      : BASE_CANVAS_W + NORMAL_VIEW_EXTRA_W;
+    const minCanvasH = isFullscreen
+      ? BASE_CANVAS_H
+      : BASE_CANVAS_H + NORMAL_VIEW_EXTRA_H;
+
+    const nextW = snapGrid(
+      Math.max(minCanvasW, viewW + 220, maxX),
+      Number.MAX_SAFE_INTEGER
+    );
+    const nextH = snapGrid(
+      Math.max(minCanvasH, viewH + 220, maxY),
+      Number.MAX_SAFE_INTEGER
+    );
+
+    setCanvasSize((prev) =>
+      prev.w !== nextW || prev.h !== nextH ? { w: nextW, h: nextH } : prev
+    );
+  }, [positions, isFullscreen]);
 
   /* ── Create connection ──────────────────────────── */
 
@@ -314,18 +385,72 @@ export default function GraphView() {
     }
   };
 
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await graphRef.current?.requestFullscreen();
+      } else if (document.fullscreenElement === graphRef.current) {
+        await document.exitFullscreen();
+      }
+    } catch {
+      toast.error("Fullscreen not available");
+    }
+  };
+
   /* ── Derived ────────────────────────────────────── */
 
   const currentGroup = groups.find((g) => g.id === groupId);
 
-  const connectionCount = useMemo(() => {
+  const { connectionCount, connectionOrder, completionOrder } = useMemo(() => {
     const counts: Record<string, number> = {};
-    groupConnections.forEach((c) =>
-      c.items.forEach((i) => {
-        counts[i.todo_id] = (counts[i.todo_id] ?? 0) + 1;
-      })
+    const order: Record<string, number> = {};
+    const orderedTodoIds: string[] = [];
+    const seen = new Set<string>();
+
+    for (const conn of groupConnections) {
+      conn.items.forEach((item) => {
+        counts[item.todo_id] = (counts[item.todo_id] ?? 0) + 1;
+
+        // Global order from "New Connections" sequence (first occurrence wins).
+        if (!seen.has(item.todo_id)) {
+          seen.add(item.todo_id);
+          orderedTodoIds.push(item.todo_id);
+        }
+      });
+    }
+
+    orderedTodoIds.forEach((todoId, index) => {
+      order[todoId] = index + 1;
+    });
+
+    const connectedById = new Map(
+      groupConnections.flatMap((conn) => conn.items.map((item) => [item.todo_id, item] as const))
     );
-    return counts;
+
+    const completionCandidates = orderedTodoIds
+      .map((todoId) => {
+        const item = connectedById.get(todoId);
+        return {
+          todoId,
+          completedAt: item?.completed_at ?? null,
+          baseOrder: order[todoId] ?? Number.MAX_SAFE_INTEGER,
+        };
+      })
+      .filter((entry) => entry.completedAt);
+
+    completionCandidates.sort((a, b) => {
+      const timeDiff = Date.parse(a.completedAt!) - Date.parse(b.completedAt!);
+      if (timeDiff !== 0) return timeDiff;
+      if (a.baseOrder !== b.baseOrder) return a.baseOrder - b.baseOrder;
+      return a.todoId.localeCompare(b.todoId);
+    });
+
+    const completeOrder: Record<string, number> = {};
+    completionCandidates.forEach((entry, index) => {
+      completeOrder[entry.todoId] = index + 1;
+    });
+
+    return { connectionCount: counts, connectionOrder: order, completionOrder: completeOrder };
   }, [groupConnections]);
 
   const canvasOffset = () => {
@@ -336,12 +461,12 @@ export default function GraphView() {
   /* ── Render ─────────────────────────────────────── */
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in" >
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-2xl font-bold tracking-tight flex items-center gap-3">
           <GitBranch size={24} className="text-indigo-500" />
-          Graph-aks
+          GraphPlan
         </h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
           Drag between ports to connect tasks &middot; Max 2 connections per task
@@ -383,35 +508,52 @@ export default function GraphView() {
         />
       ) : (
         /* ── Canvas ────────────────────────────────── */
-        <div className="relative">
-          {/* Hamburger: toggle panel */}
-          <button
-            onClick={() => setShowPanel((v) => !v)}
-            title={showPanel ? "Hide controls" : "Show controls"}
-            className="absolute top-3 right-3 z-30 w-8 h-8 rounded-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm border border-slate-200 dark:border-slate-700 flex items-center justify-center shadow-md hover:shadow-lg hover:bg-white dark:hover:bg-slate-800 transition-all duration-150"
-          >
-            <Menu size={14} className="text-slate-600 dark:text-slate-300" />
-          </button>
+        <div ref={graphRef} className={`relative ${isFullscreen ? "" : "pb-2"}`}>
+          <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+            <button
+              onClick={() => setShowPanel((v) => !v)}
+              title={showPanel ? "Hide controls" : "Show controls"}
+              className="w-8 h-8 rounded-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm border border-slate-200 dark:border-slate-700 flex items-center justify-center shadow-md hover:shadow-lg hover:bg-white dark:hover:bg-slate-800 transition-all duration-150"
+            >
+              {showPanel ? (
+                <EyeOff size={14} className="text-slate-600 dark:text-slate-300" />
+              ) : (
+                <Eye size={14} className="text-slate-600 dark:text-slate-300" />
+              )}
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit fullscreen" : "Open fullscreen"}
+              className="w-8 h-8 rounded-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm border border-slate-200 dark:border-slate-700 flex items-center justify-center shadow-md hover:shadow-lg hover:bg-white dark:hover:bg-slate-800 transition-all duration-150"
+            >
+              {isFullscreen ? (
+                <Minimize2 size={14} className="text-slate-600 dark:text-slate-300" />
+              ) : (
+                <Maximize2 size={14} className="text-slate-600 dark:text-slate-300" />
+              )}
+            </button>
+          </div>
 
           {/* Scrollable canvas */}
           <div
             ref={canvasRef}
-            className="relative rounded-2xl overflow-auto border border-slate-200 dark:border-slate-800"
+            className="relative rounded-2xl overflow-auto no-scrollbar border border-slate-200 dark:border-slate-800"
             style={{
-              minHeight: 600,
-              height: "calc(100vh - 280px)",
+              width: "100%",
+              minHeight: isFullscreen ? 0 : 600,
+              height: isFullscreen ? "calc(100vh - 40px)" : "calc(100vh - 250px)",
               background:
                 "radial-gradient(circle at 1px 1px, rgba(148,163,184,0.12) 1px, transparent 0)",
               backgroundSize: `${GRID}px ${GRID}px`,
             }}
           >
           {/* Inner virtual canvas — keeps nodes from escaping */}
-          <div style={{ width: CANVAS_W, height: CANVAS_H, position: "relative" }}>
+          <div style={{ width: canvasSize.w, height: canvasSize.h, position: "relative" }}>
           {/* ── SVG layer ──────────────────────────── */}
           <svg
             className="absolute inset-0 pointer-events-none"
-            width={CANVAS_W}
-            height={CANVAS_H}
+            width={canvasSize.w}
+            height={canvasSize.h}
             style={{ zIndex: 1 }}
           >
             <defs>
@@ -542,6 +684,9 @@ export default function GraphView() {
               });
 
               const isConnected = conns > 0;
+              const badgeNumber = isCompleted
+                ? completionOrder[todo.id] ?? connectionOrder[todo.id] ?? 1
+                : connectionOrder[todo.id] ?? 1;
 
               return (
                 <div
@@ -573,6 +718,8 @@ export default function GraphView() {
                   {/* Card */}
                   <div
                     className={`relative h-full rounded-xl border-2 transition-all duration-200 ${
+                      todo.high_priority === 1 ? "priority-warning" : ""
+                    } ${
                       isDragging
                         ? "shadow-2xl shadow-indigo-500/20 scale-[1.04]"
                         : isTarget
@@ -580,7 +727,9 @@ export default function GraphView() {
                         : "shadow-md hover:shadow-lg"
                     } ${
                       isCompleted
-                        ? "bg-slate-50 dark:bg-slate-900/80 border-emerald-400/50 opacity-70"
+                        ? isConnected
+                          ? "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-500/70"
+                          : "bg-slate-50 dark:bg-slate-900/80 border-emerald-400/50 opacity-70"
                         : isNext
                         ? "bg-gradient-to-br from-indigo-50 to-white dark:from-indigo-950/50 dark:to-slate-800 border-indigo-500 ring-2 ring-indigo-400/20"
                         : isConnected
@@ -636,10 +785,16 @@ export default function GraphView() {
                       )}
                     </div>
 
-                    {/* Connection count badge */}
+                    {/* Connection order badge */}
                     {conns > 0 && (
-                      <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-indigo-500 text-white text-[9px] font-bold flex items-center justify-center shadow-sm">
-                        {conns}
+                      <div
+                        className={`absolute -top-2 -right-2 w-5 h-5 rounded-full text-white text-[9px] font-bold flex items-center justify-center shadow-sm ${
+                          isCompleted
+                            ? "bg-emerald-500 shadow-emerald-500/30"
+                            : "bg-indigo-500 shadow-indigo-500/30"
+                        }`}
+                      >
+                        {badgeNumber}
                       </div>
                     )}
 
@@ -679,7 +834,7 @@ export default function GraphView() {
 
           {/* ── Legend panel (overlay, doesn't scroll) ── */}
           {showPanel && (
-            <div className="absolute bottom-4 right-4 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm border border-slate-200 dark:border-slate-700 px-4 py-3 text-[10px] space-y-1.5 z-30 shadow-lg">
+            <div className="absolute bottom-6 right-4 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm border border-slate-200 dark:border-slate-700 px-4 py-3 text-[10px] space-y-1.5 z-30 shadow-lg">
               <div className="font-semibold text-[11px] text-slate-600 dark:text-slate-300 mb-1.5">
                 Controls
               </div>

@@ -19,12 +19,16 @@ export default function ConnectionModal({
   onCreated,
   preselectedTodo,
 }: ConnectionModalProps) {
-  const { groups, refreshConnections } = useApp();
+  const { groups, connections, refreshConnections } = useApp();
   const [selectedTodos, setSelectedTodos] = useState<Todo[]>([]);
   const [allTodos, setAllTodos] = useState<Todo[]>([]);
   const [connectionName, setConnectionName] = useState("");
   const [loading, setLoading] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+
+  const connectedTodoIds = new Set(
+    connections.flatMap((conn) => conn.items.map((item) => item.todo_id))
+  );
 
   useEffect(() => {
     if (isOpen) {
@@ -67,11 +71,19 @@ export default function ConnectionModal({
   };
 
   // Only show todos from the selected (or any) group
-  const availableTodos = allTodos.filter((t) => {
-    if (selectedTodos.find((s) => s.id === t.id)) return false;
-    if (selectedGroupId) return t.group_id === selectedGroupId;
-    return true;
-  });
+  const availableTodos = allTodos
+    .filter((t) => {
+      if (selectedTodos.find((s) => s.id === t.id)) return false;
+      if (selectedGroupId) return t.group_id === selectedGroupId;
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.high_priority !== b.high_priority) return b.high_priority - a.high_priority;
+      if (a.high_priority === 1 && b.high_priority === 1) {
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      }
+      return a.position - b.position;
+    });
 
   const handleCreate = async () => {
     if (selectedTodos.length < 2) {
@@ -168,7 +180,7 @@ export default function ConnectionModal({
               </label>
               <input
                 className="input-base"
-                placeholder="e.g., Complete Project Launch"
+                placeholder="C'mon, Put Something Here😬"
                 value={connectionName}
                 onChange={(e) => setConnectionName(e.target.value)}
               />
@@ -272,12 +284,38 @@ export default function ConnectionModal({
                   {availableTodos.map((todo) => (
                     <button
                       key={todo.id}
-                      onClick={() => toggleTodo(todo)}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
+                      onClick={() => {
+                        if (connectedTodoIds.has(todo.id)) return;
+                        toggleTodo(todo);
+                      }}
+                      disabled={connectedTodoIds.has(todo.id)}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                        connectedTodoIds.has(todo.id)
+                          ? "opacity-45 cursor-not-allowed bg-slate-100 dark:bg-slate-800/60"
+                          : "hover:bg-slate-100 dark:hover:bg-slate-800"
+                      }`}
                     >
-                      <Plus size={14} className="text-slate-400 flex-shrink-0" />
+                      <Plus
+                        size={14}
+                        className={`flex-shrink-0 ${
+                          connectedTodoIds.has(todo.id) ? "text-slate-300 dark:text-slate-600" : "text-slate-400"
+                        }`}
+                      />
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm truncate">{todo.title}</p>
+                        <p
+                          className={`text-sm truncate ${
+                            todo.high_priority === 1
+                              ? "text-amber-700 dark:text-amber-300"
+                              : ""
+                          }`}
+                        >
+                          {todo.title}
+                        </p>
+                        {connectedTodoIds.has(todo.id) && (
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500">
+                            Already in a connection
+                          </p>
+                        )}
                       </div>
                     </button>
                   ))}

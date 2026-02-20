@@ -7,23 +7,53 @@ import {
   ChevronDown,
   Pencil,
   Check,
+  Bell,
+  CalendarDays,
+  Clock3,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 
 interface TodoItemProps {
   todo: Todo;
+  isHighlighted?: boolean;
 }
 
-export default function TodoItem({ todo }: TodoItemProps) {
+function toLocalDateTimeParts(iso: string | null): { date: string; time: string } {
+  if (!iso) return { date: "", time: "" };
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return { date: "", time: "" };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = dt.getFullYear();
+  const mm = pad(dt.getMonth() + 1);
+  const dd = pad(dt.getDate());
+  const hh = pad(dt.getHours());
+  const min = pad(dt.getMinutes());
+  return { date: `${yyyy}-${mm}-${dd}`, time: `${hh}:${min}` };
+}
+
+function buildReminderAt(date: string, time: string): string | null {
+  if (!date || !time) return null;
+  const dt = new Date(`${date}T${time}`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
+}
+
+export default function TodoItem({ todo, isHighlighted = false }: TodoItemProps) {
   const { refreshTodos, refreshConnections } = useApp();
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(todo.title);
   const [editDesc, setEditDesc] = useState(todo.description ?? "");
+  const initialReminder = toLocalDateTimeParts(todo.reminder_at);
+  const [editHighPriority, setEditHighPriority] = useState(todo.high_priority === 1);
+  const [editReminderDate, setEditReminderDate] = useState(initialReminder.date);
+  const [editReminderTime, setEditReminderTime] = useState(initialReminder.time);
   const [isChecking, setIsChecking] = useState(false);
   const [descriptionMode, setDescriptionMode] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const todayDate = new Date().toISOString().slice(0, 10);
 
   useEffect(() => {
     if (isEditing && titleRef.current) titleRef.current.focus();
@@ -32,6 +62,12 @@ export default function TodoItem({ todo }: TodoItemProps) {
   useEffect(() => {
     if (descriptionMode && descRef.current) descRef.current.focus();
   }, [descriptionMode]);
+
+  useEffect(() => {
+    if (isHighlighted && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [isHighlighted]);
 
   const handleToggle = async () => {
     setIsChecking(true);
@@ -63,10 +99,29 @@ export default function TodoItem({ todo }: TodoItemProps) {
   const handleSaveEdit = async () => {
     const title = editTitle.trim();
     if (!title) return;
+    const defaultTime = "10:00";
+    const hasAnyReminderField = !!(editReminderDate || editReminderTime);
+    const resolvedDate = hasAnyReminderField ? (editReminderDate || todayDate) : "";
+    const resolvedTime = hasAnyReminderField ? (editReminderTime || defaultTime) : "";
+    if (hasAnyReminderField) {
+      if (editReminderDate !== resolvedDate) setEditReminderDate(resolvedDate);
+      if (editReminderTime !== resolvedTime) setEditReminderTime(resolvedTime);
+    }
+    const reminderAt = hasAnyReminderField ? buildReminderAt(resolvedDate, resolvedTime) : null;
+    if (hasAnyReminderField && !reminderAt) {
+      toast.error("Reminder needs both date and time.");
+      return;
+    }
+    if (reminderAt && new Date(reminderAt).getTime() <= Date.now()) {
+      toast.error("Reminder time must be in the future");
+      return;
+    }
     try {
       await todosApi.update(todo.id, {
         title,
         description: editDesc.trim() || undefined,
+        high_priority: editHighPriority,
+        reminder_at: reminderAt,
       });
       await refreshTodos();
       setIsEditing(false);
@@ -102,6 +157,10 @@ export default function TodoItem({ todo }: TodoItemProps) {
       setIsEditing(false);
       setEditTitle(todo.title);
       setEditDesc(todo.description ?? "");
+      setEditHighPriority(todo.high_priority === 1);
+      const parts = toLocalDateTimeParts(todo.reminder_at);
+      setEditReminderDate(parts.date);
+      setEditReminderTime(parts.time);
     }
   };
 
@@ -110,12 +169,17 @@ export default function TodoItem({ todo }: TodoItemProps) {
 
   return (
     <motion.div
+      ref={cardRef}
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -24, transition: { duration: 0.2 } }}
       transition={{ duration: 0.25 }}
-      className="group/todo glass rounded-xl overflow-hidden"
+      className={`group/todo glass rounded-xl overflow-hidden ${
+        todo.high_priority === 1 ? "priority-warning" : ""
+      } ${
+        isHighlighted ? "ring-2 ring-indigo-500/60 shadow-xl shadow-indigo-500/20" : ""
+      }`}
     >
       <div className="flex items-start gap-3 px-4 py-3.5">
         {/* Checkbox */}
@@ -166,6 +230,59 @@ export default function TodoItem({ todo }: TodoItemProps) {
                   }
                 }}
               />
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={editHighPriority}
+                    onChange={(e) => setEditHighPriority(e.target.checked)}
+                    className="rounded border-slate-300 dark:border-slate-600"
+                  />
+                  High Priority
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                  <Bell size={12} />
+                  Reminder
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+                  <CalendarDays size={12} />
+                  <input
+                    type="date"
+                    value={editReminderDate}
+                    min={todayDate}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value && value < todayDate) {
+                        setEditReminderDate(todayDate);
+                        toast.error("Past date is not allowed. Updated to current date.");
+                        return;
+                      }
+                      setEditReminderDate(value);
+                    }}
+                    className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-xs"
+                  />
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+                  <Clock3 size={12} />
+                  <input
+                    type="time"
+                    value={editReminderTime}
+                    onChange={(e) => setEditReminderTime(e.target.value)}
+                    className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-xs"
+                  />
+                </label>
+                {(editReminderDate || editReminderTime) && (
+                  <button
+                    onClick={() => {
+                      setEditReminderDate("");
+                      setEditReminderTime("");
+                    }}
+                    className="btn-ghost !py-1 !px-2 text-xs"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <button onClick={handleSaveEdit} className="btn-primary !py-1.5 !px-3 text-xs">
                   Save
@@ -175,6 +292,10 @@ export default function TodoItem({ todo }: TodoItemProps) {
                     setIsEditing(false);
                     setEditTitle(todo.title);
                     setEditDesc(todo.description ?? "");
+                    setEditHighPriority(todo.high_priority === 1);
+                    const parts = toLocalDateTimeParts(todo.reminder_at);
+                    setEditReminderDate(parts.date);
+                    setEditReminderTime(parts.time);
                   }}
                   className="btn-ghost !py-1.5 !px-3 text-xs"
                 >
@@ -230,6 +351,12 @@ export default function TodoItem({ todo }: TodoItemProps) {
                 >
                   {todo.title}
                 </span>
+                {todo.reminder_at && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                    <Bell size={10} />
+                    {new Date(todo.reminder_at).toLocaleString()}
+                  </span>
+                )}
               </div>
 
               {/* Description subtext */}

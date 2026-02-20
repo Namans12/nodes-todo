@@ -15,6 +15,15 @@ function autoCapitalize(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
+function parseReminderAt(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  if (typeof value !== "string") return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed.toISOString();
+}
+
 /**
  * Creates the todos router with two sub-routers:
  * - Group-scoped routes: /api/groups/:groupId/todos
@@ -31,8 +40,11 @@ export function createGroupTodosRouter(dbOverride?: DbOverride) {
   router.post("/", async (c) => {
     try {
       const groupId = c.req.param("groupId");
+      if (!groupId) {
+        return c.json({ error: "Group ID is required" }, 400);
+      }
       const body = await c.req.json();
-      const { title, description } = body;
+      const { title, description, high_priority, reminder_at } = body;
 
       const { db: drizzleDb, sqlite } = db();
 
@@ -40,7 +52,7 @@ export function createGroupTodosRouter(dbOverride?: DbOverride) {
       const group = drizzleDb
         .select()
         .from(groups)
-        .where(eq(groups.id, groupId))
+        .where(and(eq(groups.id, groupId), isNull(groups.deleted_at)))
         .get();
 
       if (!group) {
@@ -60,6 +72,23 @@ export function createGroupTodosRouter(dbOverride?: DbOverride) {
       const trimmedDescription = description != null && typeof description === "string"
         ? description.trim() || null
         : null;
+      if (
+        high_priority !== undefined &&
+        high_priority !== true &&
+        high_priority !== false &&
+        high_priority !== 1 &&
+        high_priority !== 0
+      ) {
+        return c.json({ error: "high_priority must be a boolean or 0/1" }, 400);
+      }
+      const priorityValue = high_priority === true || high_priority === 1 ? 1 : 0;
+      const parsedReminderAt = parseReminderAt(reminder_at);
+      if (reminder_at !== undefined && parsedReminderAt === undefined) {
+        return c.json({ error: "reminder_at must be a valid ISO date-time string or null" }, 400);
+      }
+      if (parsedReminderAt && new Date(parsedReminderAt).getTime() <= Date.now()) {
+        return c.json({ error: "reminder_at must be in the future" }, 400);
+      }
 
       const now = new Date().toISOString();
       const newTodo = {
@@ -67,7 +96,10 @@ export function createGroupTodosRouter(dbOverride?: DbOverride) {
         group_id: groupId,
         title: trimmedTitle,
         description: trimmedDescription,
+        high_priority: priorityValue,
+        reminder_at: parsedReminderAt ?? null,
         is_completed: 0,
+        completed_at: null,
         position: 0,
         deleted_at: null,
         created_at: now,
@@ -101,6 +133,9 @@ export function createGroupTodosRouter(dbOverride?: DbOverride) {
   router.get("/", async (c) => {
     try {
       const groupId = c.req.param("groupId");
+      if (!groupId) {
+        return c.json({ error: "Group ID is required" }, 400);
+      }
       const includeDeleted = c.req.query("include_deleted") === "true";
       const { db: drizzleDb } = db();
 
@@ -108,7 +143,7 @@ export function createGroupTodosRouter(dbOverride?: DbOverride) {
       const group = drizzleDb
         .select()
         .from(groups)
-        .where(eq(groups.id, groupId))
+        .where(and(eq(groups.id, groupId), isNull(groups.deleted_at)))
         .get();
 
       if (!group) {
@@ -236,7 +271,11 @@ export function createTodosRouter(dbOverride?: DbOverride) {
 
       drizzleDb
         .update(todos)
-        .set({ is_completed: newStatus, updated_at: now })
+        .set({
+          is_completed: newStatus,
+          completed_at: newStatus === 1 ? now : null,
+          updated_at: now,
+        })
         .where(eq(todos.id, id))
         .run();
 
@@ -257,7 +296,7 @@ export function createTodosRouter(dbOverride?: DbOverride) {
     try {
       const id = c.req.param("id");
       const body = await c.req.json();
-      const { title, description } = body;
+      const { title, description, high_priority, reminder_at } = body;
 
       const { db: drizzleDb } = db();
 
@@ -295,6 +334,29 @@ export function createTodosRouter(dbOverride?: DbOverride) {
         } else {
           return c.json({ error: "Description must be a string or null" }, 400);
         }
+      }
+
+      if (high_priority !== undefined) {
+        if (
+          high_priority !== true &&
+          high_priority !== false &&
+          high_priority !== 1 &&
+          high_priority !== 0
+        ) {
+          return c.json({ error: "high_priority must be a boolean or 0/1" }, 400);
+        }
+        updates.high_priority = high_priority === true || high_priority === 1 ? 1 : 0;
+      }
+
+      if (reminder_at !== undefined) {
+        const parsedReminderAt = parseReminderAt(reminder_at);
+        if (parsedReminderAt === undefined) {
+          return c.json({ error: "reminder_at must be a valid ISO date-time string or null" }, 400);
+        }
+        if (parsedReminderAt && new Date(parsedReminderAt).getTime() <= Date.now()) {
+          return c.json({ error: "reminder_at must be in the future" }, 400);
+        }
+        updates.reminder_at = parsedReminderAt;
       }
 
       drizzleDb

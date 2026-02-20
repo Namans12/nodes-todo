@@ -370,7 +370,7 @@ describe("Groups CRUD API", () => {
       expect(res.status).toBe(404);
     });
 
-    it("should cascade delete all todos in the group", async () => {
+    it("should move all group todos to trash when deleting a group", async () => {
       // Create a group
       const createRes = await ctx.app.request("/api/groups", {
         method: "POST",
@@ -399,9 +399,16 @@ describe("Groups CRUD API", () => {
       });
       expect(res.status).toBe(200);
 
-      // Verify todos are also deleted (cascade) since they can't exist without their group
+      // Verify todos are moved to trash, not hard-deleted
       const todosAfter = ctx.db.select().from(todos).where(eq(todos.group_id, groupId)).all();
-      expect(todosAfter).toHaveLength(0);
+      expect(todosAfter).toHaveLength(2);
+      expect(todosAfter.every((t) => t.deleted_at !== null)).toBe(true);
+
+      const trashRes = await ctx.app.request("/api/trash");
+      const trashBody = await trashRes.json();
+      expect(trashRes.status).toBe(200);
+      expect(trashBody.data).toHaveLength(2);
+      expect(trashBody.data.every((t: any) => t.group_name === "Has Todos")).toBe(true);
     });
   });
 

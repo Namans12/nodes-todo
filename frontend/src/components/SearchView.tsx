@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { searchApi } from "../api/client";
 import type { SearchResult } from "../api/client";
+import { useApp } from "../context/AppContext";
 import { Search, X, FolderOpen } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function SearchView() {
+  const { jumpToTodo } = useApp();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searched, setSearched] = useState(false);
@@ -104,7 +106,16 @@ export default function SearchView() {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04 }}
-                className="glass rounded-xl px-4 py-3.5"
+                onClick={() => {
+                  jumpToTodo(item.group.id, item.id);
+                }}
+                className={`glass rounded-xl px-4 py-3.5 cursor-pointer border-2 transition-all ${
+                  item.high_priority === 1
+                    ? "border-amber-500 ring-1 ring-amber-400/35 shadow-[0_0_0_1px_rgba(245,158,11,0.25)] hover:ring-amber-400/60"
+                    : item.is_completed === 1
+                    ? "border-emerald-500 ring-1 ring-emerald-400/35 shadow-[0_0_0_1px_rgba(16,185,129,0.25)] hover:ring-emerald-400/60"
+                    : "border-indigo-500 ring-1 ring-indigo-400/35 shadow-[0_0_0_1px_rgba(99,102,241,0.25)] hover:ring-indigo-400/60"
+                }`}
               >
                 <div className="flex items-start gap-3">
                   <div
@@ -128,6 +139,12 @@ export default function SearchView() {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <FolderOpen size={11} className="text-slate-500 dark:text-slate-400" />
+                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+                        Group: {item.group?.name ?? "Unknown group"}
+                      </span>
+                    </div>
                     <p
                       className={`text-sm ${
                         item.is_completed
@@ -142,12 +159,6 @@ export default function SearchView() {
                         {item.description}
                       </p>
                     )}
-                    <div className="flex items-center gap-1.5 mt-1.5">
-                      <FolderOpen size={11} className="text-slate-400 dark:text-slate-500" />
-                      <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                        {item.group.name}
-                      </span>
-                    </div>
                   </div>
                 </div>
               </motion.div>

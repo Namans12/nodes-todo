@@ -28,7 +28,6 @@ export default function Sidebar() {
     currentView,
     refreshGroups,
     refreshConnections,
-    setSidebarOpen,
   } = useApp();
   const { theme, toggle } = useTheme();
 
@@ -42,7 +41,8 @@ export default function Sidebar() {
     const name = newGroupName.trim();
     if (!name) return;
     try {
-      await groupsApi.create(name);
+      const created = await groupsApi.create(name);
+      selectGroup(created.id);
       await refreshGroups();
       setNewGroupName("");
       setShowNewGroup(false);
@@ -79,7 +79,7 @@ export default function Sidebar() {
   const navItems = [
     { id: "trash" as const, icon: Trash2, label: "Trash" },
     { id: "connections" as const, icon: Share2, label: "Connections" },
-    { id: "graph" as const, icon: GitBranch, label: "Graph-aks" },
+    { id: "graph" as const, icon: GitBranch, label: "GraphPlan" },
     { id: "search" as const, icon: Search, label: "Search" },
   ];
 
@@ -244,7 +244,6 @@ export default function Sidebar() {
                     }`}
                     onClick={() => {
                       selectGroup(group.id);
-                      setSidebarOpen(false);
                     }}
                   >
                     <FolderOpen
@@ -314,7 +313,6 @@ export default function Sidebar() {
             key={item.id}
             onClick={() => {
               setCurrentView(item.id);
-              setSidebarOpen(false);
             }}
             className={`sidebar-item w-full ${
               currentView === item.id ? "active" : ""

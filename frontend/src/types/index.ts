@@ -11,7 +11,10 @@ export interface Todo {
   group_id: string;
   title: string;
   description: string | null;
+  high_priority: number;
+  reminder_at: string | null;
   is_completed: number;
+  completed_at: string | null;
   position: number;
   deleted_at: string | null;
   created_at: string;
@@ -19,6 +22,9 @@ export interface Todo {
 }
 
 export interface TrashItem extends Todo {
+  group_name: string;
+  group_deleted: boolean;
+  group_deleted_at: string | null;
   days_until_purge: number;
 }
 
@@ -27,6 +33,8 @@ export interface ConnectionItem {
   todo_id: string;
   title: string;
   is_completed: number;
+  high_priority: number;
+  completed_at: string | null;
   position: number;
 }
 

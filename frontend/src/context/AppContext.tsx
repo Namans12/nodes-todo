@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import type { Group, Todo, Connection, View } from "../types";
@@ -15,21 +16,47 @@ interface AppState {
   selectedGroupId: string | null;
   todos: Todo[];
   connections: Connection[];
+  highlightTodoId: string | null;
   currentView: View;
   loading: boolean;
   sidebarOpen: boolean;
+  activeReminderAlarm: {
+    todoId: string;
+    title: string;
+    reminderAt: string;
+    highPriority: boolean;
+    groupName: string;
+  } | null;
 }
 
 interface AppContextType extends AppState {
   setCurrentView: (view: View) => void;
   selectGroup: (id: string | null) => void;
+  jumpToTodo: (groupId: string, todoId: string) => void;
+  clearHighlightedTodo: () => void;
   refreshGroups: () => Promise<void>;
   refreshTodos: () => Promise<void>;
   refreshConnections: () => Promise<void>;
   setSidebarOpen: (open: boolean) => void;
+  stopReminderAlarm: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
+const REMINDER_ACK_KEY = "nodes-todo-reminder-ack";
+
+function readReminderAcks(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(REMINDER_ACK_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function writeReminderAcks(value: Record<string, string>) {
+  localStorage.setItem(REMINDER_ACK_KEY, JSON.stringify(value));
+}
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>({
@@ -37,10 +64,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     selectedGroupId: null,
     todos: [],
     connections: [],
+    highlightTodoId: null,
     currentView: "todos",
     loading: true,
     sidebarOpen: true,
+    activeReminderAlarm: null,
   });
+  const lastToastAlarmKeyRef = useRef<string | null>(null);
 
   const refreshGroups = useCallback(async () => {
     try {
@@ -86,7 +116,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectGroup = useCallback((id: string | null) => {
-    setState((s) => ({ ...s, selectedGroupId: id, currentView: "todos" }));
+    setState((s) => ({
+      ...s,
+      selectedGroupId: id,
+      currentView: "todos",
+      highlightTodoId: null,
+    }));
+  }, [refreshTodos]);
+
+  const jumpToTodo = useCallback((groupId: string, todoId: string) => {
+    setState((s) => ({
+      ...s,
+      selectedGroupId: groupId,
+      currentView: "todos",
+      highlightTodoId: todoId,
+    }));
+  }, []);
+
+  const clearHighlightedTodo = useCallback(() => {
+    setState((s) => ({ ...s, highlightTodoId: null }));
   }, []);
 
   const setCurrentView = useCallback((view: View) => {
@@ -95,6 +143,123 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setSidebarOpen = useCallback((open: boolean) => {
     setState((s) => ({ ...s, sidebarOpen: open }));
+  }, []);
+
+  const stopReminderAlarm = useCallback(async () => {
+    const alarmToStop = state.activeReminderAlarm;
+    if (!alarmToStop) return;
+    setState((s) => ({ ...s, activeReminderAlarm: null }));
+    const acks = readReminderAcks();
+    acks[alarmToStop.todoId] = alarmToStop.reminderAt;
+    writeReminderAcks(acks);
+    try {
+      // Alarm acknowledged: clear reminder date/time from the todo.
+      await todosApi.update(alarmToStop.todoId, { reminder_at: null });
+      await refreshTodos();
+    } catch {
+      // Keep UX smooth if clearing reminder fails.
+    }
+  }, [state.activeReminderAlarm, refreshTodos]);
+
+  const checkDueReminders = useCallback(async () => {
+    try {
+      const allGroups = await groupsApi.list();
+      if (allGroups.length === 0) return;
+
+      const lists = await Promise.all(allGroups.map((g) => todosApi.list(g.id)));
+      const allTodos = lists.flat();
+      const now = Date.now();
+      const acks = readReminderAcks();
+      let updated = false;
+      const groupNameById = new Map(allGroups.map((g) => [g.id, g.name] as const));
+
+      const activeReminderIds = new Set<string>();
+      const dueAlarms: Array<{
+        todoId: string;
+        title: string;
+        reminderAt: string;
+        highPriority: boolean;
+        groupName: string;
+        dueAt: number;
+      }> = [];
+
+      for (const todo of allTodos) {
+        if (!todo.reminder_at || todo.deleted_at || todo.is_completed === 1) continue;
+        activeReminderIds.add(todo.id);
+
+        const dueAt = new Date(todo.reminder_at).getTime();
+        if (Number.isNaN(dueAt) || dueAt > now) continue;
+
+        if (acks[todo.id] === todo.reminder_at) continue;
+        dueAlarms.push({
+          todoId: todo.id,
+          title: todo.title,
+          reminderAt: todo.reminder_at,
+          highPriority: todo.high_priority === 1,
+          groupName: groupNameById.get(todo.group_id) ?? "Unknown group",
+          dueAt,
+        });
+      }
+
+      for (const id of Object.keys(acks)) {
+        if (!activeReminderIds.has(id)) {
+          delete acks[id];
+          updated = true;
+        }
+      }
+
+      if (updated) writeReminderAcks(acks);
+
+      dueAlarms.sort((a, b) => a.dueAt - b.dueAt);
+      const nextAlarm = dueAlarms[0] ?? null;
+
+      setState((s) => {
+        const current = s.activeReminderAlarm;
+        if (!current && !nextAlarm) return s;
+
+        if (current) {
+          const currentStillDue = dueAlarms.some(
+            (a) => a.todoId === current.todoId && a.reminderAt === current.reminderAt
+          );
+          if (currentStillDue) return s;
+        }
+
+        if (!nextAlarm) {
+          return { ...s, activeReminderAlarm: null };
+        }
+
+        const prefix = nextAlarm.highPriority ? "High Priority Reminder" : "Reminder";
+        const alarmKey = `${nextAlarm.todoId}:${nextAlarm.reminderAt}`;
+        if (lastToastAlarmKeyRef.current !== alarmKey) {
+          toast(`${prefix}: ${nextAlarm.title}`, {
+            id: `reminder-${nextAlarm.todoId}`,
+            duration: 5000,
+          });
+          lastToastAlarmKeyRef.current = alarmKey;
+        }
+
+        if ("Notification" in window) {
+          if (Notification.permission === "granted") {
+            new Notification(prefix, { body: nextAlarm.title });
+          } else if (Notification.permission === "default") {
+            Notification.requestPermission().catch(() => undefined);
+          }
+        }
+
+        return {
+          ...s,
+          activeReminderAlarm: {
+            todoId: nextAlarm.todoId,
+            title: nextAlarm.title,
+            reminderAt: nextAlarm.reminderAt,
+            highPriority: nextAlarm.highPriority,
+            groupName: nextAlarm.groupName,
+          },
+        };
+      });
+    } catch {
+      // Ignore reminder polling errors to avoid noisy UX
+    }
   }, []);
 
   // Initial load
@@ -114,16 +279,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [state.selectedGroupId, refreshTodos]);
 
+  useEffect(() => {
+    if (state.loading) return;
+    checkDueReminders();
+    const interval = setInterval(checkDueReminders, 5_000);
+    return () => clearInterval(interval);
+  }, [state.loading, checkDueReminders]);
+
   return (
     <AppContext.Provider
       value={{
         ...state,
         setCurrentView,
         selectGroup,
+        jumpToTodo,
+        clearHighlightedTodo,
         refreshGroups,
         refreshTodos,
         refreshConnections,
         setSidebarOpen,
+        stopReminderAlarm,
       }}
     >
       {children}

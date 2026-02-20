@@ -7,8 +7,18 @@ import { createApp } from "../app.js";
 import path from "path";
 import os from "os";
 import fs from "fs";
+import type { AppDatabase, DbContext, SqliteConnection } from "../db/connection.js";
 
-export function createTestContext() {
+export interface TestContext {
+  app: ReturnType<typeof createApp>;
+  db: AppDatabase;
+  sqlite: SqliteConnection;
+  dbOverride: DbContext;
+  testDbPath: string;
+  cleanup: () => void;
+}
+
+export function createTestContext(): TestContext {
   const testDbPath = path.join(os.tmpdir(), `nodes-todo-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
 
   // Run migrations to create tables

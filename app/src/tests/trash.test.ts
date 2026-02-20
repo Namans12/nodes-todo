@@ -95,6 +95,7 @@ describe("Trash & Auto-Purge API", () => {
       expect(res.status).toBe(200);
       expect(body.data).toHaveLength(1);
       expect(body.data[0].id).toBe(todo.id);
+      expect(body.data[0].group_name).toBe("Test Group");
       expect(body.data[0].deleted_at).toBeTruthy();
       expect(body.data[0].days_until_purge).toBe(30);
     });
@@ -227,6 +228,27 @@ describe("Trash & Auto-Purge API", () => {
       const trashBody = await trashRes.json();
       expect(trashBody.data).toHaveLength(0);
     });
+
+    it("should restore a deleted group with all its todos", async () => {
+      const t1 = await createTodo(testGroupId, "g1");
+      const t2 = await createTodo(testGroupId, "g2");
+
+      await ctx.app.request(`/api/groups/${testGroupId}`, { method: "DELETE" });
+
+      const restoreRes = await ctx.app.request(`/api/trash/groups/${testGroupId}/restore`, {
+        method: "POST",
+      });
+      expect(restoreRes.status).toBe(200);
+
+      const groupRes = await ctx.app.request(`/api/groups/${testGroupId}`);
+      expect(groupRes.status).toBe(200);
+
+      const listRes = await ctx.app.request(`/api/groups/${testGroupId}/todos`);
+      const listBody = await listRes.json();
+      const ids = listBody.data.map((t: any) => t.id);
+      expect(ids).toContain(t1.id);
+      expect(ids).toContain(t2.id);
+    });
   });
 
   // ─── DELETE /api/trash/:id ─────────────────────────
@@ -342,6 +364,28 @@ describe("Trash & Auto-Purge API", () => {
         .where(eq(connectionItems.todo_id, todoId))
         .get();
       expect(connItem).toBeUndefined();
+    });
+  });
+
+  describe("DELETE /api/trash/groups/:id", () => {
+    it("should permanently delete a trashed group and all its todos", async () => {
+      const t1 = await createTodo(testGroupId, "g1");
+      const t2 = await createTodo(testGroupId, "g2");
+
+      await ctx.app.request(`/api/groups/${testGroupId}`, { method: "DELETE" });
+
+      const res = await ctx.app.request(`/api/trash/groups/${testGroupId}`, {
+        method: "DELETE",
+      });
+      expect(res.status).toBe(200);
+
+      const groupRow = ctx.db.select().from(groups).where(eq(groups.id, testGroupId)).get();
+      expect(groupRow).toBeUndefined();
+
+      const todo1 = ctx.db.select().from(todos).where(eq(todos.id, t1.id)).get();
+      const todo2 = ctx.db.select().from(todos).where(eq(todos.id, t2.id)).get();
+      expect(todo1).toBeUndefined();
+      expect(todo2).toBeUndefined();
     });
   });
 
@@ -647,6 +691,34 @@ describe("Trash & Auto-Purge API", () => {
       // Should not be findable at all
       const getRes = await ctx.app.request(`/api/todos/${todo.id}`);
       expect(getRes.status).toBe(404);
+    });
+
+    it("should preserve connections while group is in trash and restore them with group restore", async () => {
+      const t1 = await createTodo(testGroupId, "c1");
+      const t2 = await createTodo(testGroupId, "c2");
+
+      const connRes = await ctx.app.request("/api/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ todoIds: [t1.id, t2.id], name: "Trash Conn" }),
+      });
+      expect(connRes.status).toBe(201);
+
+      await ctx.app.request(`/api/groups/${testGroupId}`, { method: "DELETE" });
+
+      const hiddenConnRes = await ctx.app.request("/api/connections");
+      const hiddenConnBody = await hiddenConnRes.json();
+      expect(hiddenConnBody.data).toHaveLength(1);
+      expect(hiddenConnBody.data[0].items).toHaveLength(0);
+
+      await ctx.app.request(`/api/trash/groups/${testGroupId}/restore`, {
+        method: "POST",
+      });
+
+      const restoredConnRes = await ctx.app.request("/api/connections");
+      const restoredConnBody = await restoredConnRes.json();
+      expect(restoredConnBody.data).toHaveLength(1);
+      expect(restoredConnBody.data[0].items).toHaveLength(2);
     });
   });
 });

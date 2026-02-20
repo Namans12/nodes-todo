@@ -17,6 +17,8 @@ function buildConnectionResponse(
     todo_id: string;
     title: string;
     is_completed: number;
+    high_priority: number;
+    completed_at: string | null;
     position: number;
   }>
 ) {
@@ -32,6 +34,8 @@ function buildConnectionResponse(
       todo_id: i.todo_id,
       title: i.title,
       is_completed: i.is_completed,
+      high_priority: i.high_priority,
+      completed_at: i.completed_at,
       position: i.position,
     })),
     progress: {
@@ -72,6 +76,8 @@ export function createConnectionsRouter(dbOverride?: DbOverride) {
         todo_id: connectionItems.todo_id,
         title: todos.title,
         is_completed: todos.is_completed,
+        high_priority: todos.high_priority,
+        completed_at: todos.completed_at,
         position: connectionItems.position,
       })
       .from(connectionItems)

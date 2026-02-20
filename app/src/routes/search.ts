@@ -87,6 +87,7 @@ export function createSearchRouter(dbOverride?: DbOverride) {
         id: todos.id,
         title: todos.title,
         description: todos.description,
+        high_priority: todos.high_priority,
         is_completed: todos.is_completed,
         position: todos.position,
         group_id: todos.group_id,
@@ -123,6 +124,7 @@ export function createSearchRouter(dbOverride?: DbOverride) {
           id: r.id,
           title: r.title,
           description: r.description,
+          high_priority: r.high_priority,
           is_completed: r.is_completed,
           position: r.position,
           group: {

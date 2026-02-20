@@ -34,11 +34,14 @@ describe("Node Connections API", () => {
   });
 
   // Helper: create a todo via API
-  async function createTodo(groupId: string, title: string) {
+  async function createTodo(groupId: string, title: string, options?: { high_priority?: boolean }) {
     const res = await ctx.app.request(`/api/groups/${groupId}/todos`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({
+        title,
+        high_priority: options?.high_priority,
+      }),
     });
     return (await res.json()).data;
   }
@@ -85,6 +88,8 @@ describe("Node Connections API", () => {
       expect(body.data.items[0].todo_id).toBe(todo1.id);
       expect(body.data.items[0].title).toBe("Buy groceries");
       expect(body.data.items[0].position).toBe(0);
+      expect(body.data.items[0].high_priority).toBe(0);
+      expect(body.data.items[0].completed_at).toBeNull();
       expect(body.data.items[1].todo_id).toBe(todo2.id);
       expect(body.data.items[1].position).toBe(1);
       expect(body.data.progress).toEqual({
@@ -119,6 +124,17 @@ describe("Node Connections API", () => {
       expect(res.status).toBe(201);
       expect(body.data.items).toHaveLength(3);
       expect(body.data.progress.total).toBe(3);
+    });
+
+    it("should include high_priority on connection items", async () => {
+      const urgent = await createTodo(testGroupId, "urgent", { high_priority: true });
+      const normal = await createTodo(testGroupId, "normal");
+
+      const { res, body } = await createConnection([urgent.id, normal.id], "Urgency Check");
+
+      expect(res.status).toBe(201);
+      expect(body.data.items[0].high_priority).toBe(1);
+      expect(body.data.items[1].high_priority).toBe(0);
     });
 
     it("should return 400 if fewer than 2 todoIds are provided", async () => {
@@ -278,6 +294,8 @@ describe("Node Connections API", () => {
       expect(body.data[0].progress.completed).toBe(1);
       expect(body.data[0].progress.percentage).toBe(50);
       expect(body.data[0].is_fully_complete).toBe(false);
+      const completedItem = body.data[0].items.find((item: any) => item.todo_id === todo1.id);
+      expect(completedItem?.completed_at).toBeTruthy();
     });
 
     it("should show is_fully_complete when all todos are completed", async () => {
