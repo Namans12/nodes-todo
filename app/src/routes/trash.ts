@@ -1,7 +1,15 @@
 import { Hono } from "hono";
 import { eq, isNotNull, sql, inArray } from "drizzle-orm";
 import { getDb } from "../db/connection.js";
-import { todos, connectionItems, connections, groups } from "../db/schema.js";
+import {
+  todos,
+  connectionItems,
+  connections,
+  groups,
+  graphEdges,
+  graphNodePositions,
+  graphNodes,
+} from "../db/schema.js";
 
 // Type for the injected DB (allows test override)
 type DbOverride = ReturnType<typeof getDb>;
@@ -155,6 +163,36 @@ export function createTrashRouter(dbOverride?: DbOverride) {
 
       const transaction = sqlite.transaction(() => {
         if (todoIds.length > 0) {
+          const graphTodoNodes = drizzleDb
+            .select({ id: graphNodes.id })
+            .from(graphNodes)
+            .where(inArray(graphNodes.todo_id, todoIds))
+            .all()
+            .map((n) => n.id);
+
+          if (graphTodoNodes.length > 0) {
+            drizzleDb
+              .delete(graphEdges)
+              .where(
+                sql`${graphEdges.from_node_id} IN (${sql.join(
+                  graphTodoNodes.map((id) => sql`${id}`),
+                  sql`, `
+                )}) OR ${graphEdges.to_node_id} IN (${sql.join(
+                  graphTodoNodes.map((id) => sql`${id}`),
+                  sql`, `
+                )})`
+              )
+              .run();
+            drizzleDb
+              .delete(graphNodePositions)
+              .where(inArray(graphNodePositions.node_id, graphTodoNodes))
+              .run();
+            drizzleDb
+              .delete(graphNodes)
+              .where(inArray(graphNodes.id, graphTodoNodes))
+              .run();
+          }
+
           drizzleDb
             .delete(connectionItems)
             .where(inArray(connectionItems.todo_id, todoIds))
@@ -343,6 +381,38 @@ export function createTrashRouter(dbOverride?: DbOverride) {
       }
 
       const transaction = sqlite.transaction(() => {
+        const todoIds = trashedTodos.map((todo) => todo.id);
+        if (todoIds.length > 0) {
+          const graphTodoNodes = drizzleDb
+            .select({ id: graphNodes.id })
+            .from(graphNodes)
+            .where(inArray(graphNodes.todo_id, todoIds))
+            .all()
+            .map((n) => n.id);
+          if (graphTodoNodes.length > 0) {
+            drizzleDb
+              .delete(graphEdges)
+              .where(
+                sql`${graphEdges.from_node_id} IN (${sql.join(
+                  graphTodoNodes.map((id) => sql`${id}`),
+                  sql`, `
+                )}) OR ${graphEdges.to_node_id} IN (${sql.join(
+                  graphTodoNodes.map((id) => sql`${id}`),
+                  sql`, `
+                )})`
+              )
+              .run();
+            drizzleDb
+              .delete(graphNodePositions)
+              .where(inArray(graphNodePositions.node_id, graphTodoNodes))
+              .run();
+            drizzleDb
+              .delete(graphNodes)
+              .where(inArray(graphNodes.id, graphTodoNodes))
+              .run();
+          }
+        }
+
         // Remove connection_items referencing trashed todos
         for (const todo of trashedTodos) {
           drizzleDb
@@ -440,6 +510,38 @@ export function runAutoPurge(dbOverride?: DbOverride): number {
   }
 
   const transaction = sqlite.transaction(() => {
+    const expiredTodoIds = expiredTodos.map((todo) => todo.id);
+    if (expiredTodoIds.length > 0) {
+      const graphTodoNodes = drizzleDb
+        .select({ id: graphNodes.id })
+        .from(graphNodes)
+        .where(inArray(graphNodes.todo_id, expiredTodoIds))
+        .all()
+        .map((n) => n.id);
+      if (graphTodoNodes.length > 0) {
+        drizzleDb
+          .delete(graphEdges)
+          .where(
+            sql`${graphEdges.from_node_id} IN (${sql.join(
+              graphTodoNodes.map((id) => sql`${id}`),
+              sql`, `
+            )}) OR ${graphEdges.to_node_id} IN (${sql.join(
+              graphTodoNodes.map((id) => sql`${id}`),
+              sql`, `
+            )})`
+          )
+          .run();
+        drizzleDb
+          .delete(graphNodePositions)
+          .where(inArray(graphNodePositions.node_id, graphTodoNodes))
+          .run();
+        drizzleDb
+          .delete(graphNodes)
+          .where(inArray(graphNodes.id, graphTodoNodes))
+          .run();
+      }
+    }
+
     // Remove connection_items referencing expired todos
     for (const todo of expiredTodos) {
       drizzleDb

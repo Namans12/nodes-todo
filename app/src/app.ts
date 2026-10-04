@@ -5,6 +5,7 @@ import { createTrashRouter } from "./routes/trash.js";
 import { createConnectionsRouter } from "./routes/connections.js";
 import { createBatchRouter } from "./routes/batch.js";
 import { createSearchRouter } from "./routes/search.js";
+import { createGraphRouter } from "./routes/graph.js";
 
 type DbOverride = Parameters<typeof createGroupsRouter>[0];
 
@@ -23,6 +24,7 @@ export function createApp(dbOverride?: DbOverride) {
   app.route("/api/todos/batch", createBatchRouter(dbOverride));
   app.route("/api/trash", createTrashRouter(dbOverride));
   app.route("/api/connections", createConnectionsRouter(dbOverride));
+  app.route("/api/graph", createGraphRouter(dbOverride));
   app.route("/api/search", createSearchRouter(dbOverride));
 
   return app;

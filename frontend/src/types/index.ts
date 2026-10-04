@@ -53,4 +53,44 @@ export interface Connection {
   created_at: string;
 }
 
+export interface GraphNode {
+  id: string;
+  group_id: string;
+  todo_id: string | null;
+  kind: "atomic" | "composite" | "milestone" | "conditional";
+  parent_node_id: string | null;
+  title: string;
+  description: string | null;
+  condition_type: string | null;
+  condition_payload: string | null;
+  created_at: string;
+  updated_at: string;
+  view: "canvas" | "library";
+  x: number | null;
+  y: number | null;
+  library_sort_key: string | null;
+  is_completed: number;
+  is_blocked: boolean;
+  is_connected: boolean;
+  priority: number;
+  completed_at: string | null;
+}
+
+export interface GraphEdge {
+  id: string;
+  from_node_id: string;
+  to_node_id: string;
+  edge_type: "sequential" | "dependency" | "parallel_group" | "hierarchy" | "soft_association";
+  order_index: number | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface GraphState {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  roots: string[];
+}
+
 export type View = "todos" | "trash" | "connections" | "search" | "graph";

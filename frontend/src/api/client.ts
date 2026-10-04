@@ -1,4 +1,4 @@
-import type { Group, Todo, TrashItem, Connection } from "../types";
+import type { Group, Todo, TrashItem, Connection, GraphState } from "../types";
 
 const BASE = "/api";
 
@@ -140,6 +140,27 @@ export const connectionsApi = {
     }),
   delete: (id: string) =>
     request<void>(`/connections/${id}`, { method: "DELETE" }),
+};
+
+// ── Graph ───────────────────────────────────────────────
+export const graphApi = {
+  state: (groupId: string) =>
+    request<GraphState>(`/graph/state?group_id=${encodeURIComponent(groupId)}`),
+  createEdge: (fromNodeId: string, toNodeId: string, edgeType: string, orderIndex?: number) =>
+    request<{ message: string }>("/graph/edge", {
+      method: "POST",
+      body: JSON.stringify({ fromNodeId, toNodeId, edgeType, orderIndex }),
+    }),
+  merge: (sourceNodeId: string, targetNodeId: string, title?: string) =>
+    request<{ composite_node_id: string }>("/graph/merge", {
+      method: "POST",
+      body: JSON.stringify({ sourceNodeId, targetNodeId, title }),
+    }),
+  setPosition: (nodeId: string, view: "canvas" | "library", x?: number | null, y?: number | null) =>
+    request<{ message: string }>("/graph/position", {
+      method: "PATCH",
+      body: JSON.stringify({ nodeId, view, x, y }),
+    }),
 };
 
 // ── Search ──────────────────────────────────────────────
